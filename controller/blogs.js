@@ -1,11 +1,20 @@
 const blogsRouter = require('express').Router()
 const Blog = require('../models/blogs')
+const Comment = require('../models/comment')
 const jwt = require('jsonwebtoken')
 const middlewares = require('../utils/middleware')
 
 // get all blogs
 blogsRouter.get('/', async (request, response) => {
-  const blogs = await Blog.find({}).populate('user', { username: 1, name: 1 })
+  const blogs = await Blog.find({}).populate([
+    { path: 'user', select: 'username name' },
+    {
+      path: 'comments',
+      select: 'description createdAt updatedAt',
+      populate: { path: 'author', select: 'username name' },
+    },
+  ])
+
   response.json(blogs)
 })
 
@@ -106,7 +115,7 @@ blogsRouter.put(
     const blogId = request.params.id
     const userId = request.user._id
 
-    // check if user is authorized to delete blog
+    // check if user is authorized to update blog
     if (userId.toString() !== decodedToken.id)
       return response.status(401).send({ error: 'unauthorized' })
 
@@ -116,13 +125,80 @@ blogsRouter.put(
     })
 
     // populate user field
-    returnedBlog = await Blog.findById(returnedBlog._id).populate('user', {
-      username: 1,
-      name: 1,
+    returnedBlog = await Blog.findById(returnedBlog._id).populate({
+      path: 'user',
+      select: 'username name',
     })
 
     response.json(returnedBlog)
   }
 )
+
+// COMMENTS HERE
+
+// POST COMMENT
+blogsRouter.post(
+  '/:id/comment',
+  middlewares.userExtractor,
+  async (request, response) => {
+    const body = request.body
+
+    const decodedToken = jwt.verify(request.token, process.env.SECRET)
+
+    if (!decodedToken.id)
+      return response.status(401).json({
+        error: 'token missing or invalid or expired',
+      })
+
+    const user = request.user
+    const blogId = request.params.id
+    const selectedBlog = await Blog.findById(blogId)
+
+    const newComment = new Comment({
+      description: body.description,
+      author: user._id,
+      blog: selectedBlog._id,
+    })
+
+    let savedComment = await newComment.save()
+
+    // FOR USER MODEL
+    user.comments = user.comments.concat(savedComment._id)
+    await user.save()
+
+    // FOR BLOGS MODEL
+    selectedBlog.comments = selectedBlog.comments.concat(savedComment._id)
+    await selectedBlog.save()
+
+    savedComment = await Comment.findById(savedComment._id).populate([
+      { path: 'author', select: 'username name' },
+      { path: 'blog', select: 'title author url likes' },
+    ])
+
+    response.status(201).json(savedComment)
+  }
+)
+
+// GET COMMENT
+blogsRouter.get('/:id/comments', async (request, response) => {
+  const decodedToken = jwt.verify(request.token, process.env.SECRET)
+
+  if (!decodedToken.id)
+    return response
+      .status(401)
+      .json({ error: 'token missing or invalid or expired' })
+
+  const blogId = request.params.id
+  const selectedBlog = await Blog.findById(blogId).populate([
+    { path: 'user', select: 'username name' },
+    {
+      path: 'comments',
+      select: 'description createdAt updatedAt',
+      populate: { path: 'author', select: 'username name' },
+    },
+  ])
+
+  response.json(selectedBlog.comments)
+})
 
 module.exports = blogsRouter
