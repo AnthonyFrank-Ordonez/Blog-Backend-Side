@@ -1,6 +1,7 @@
 const blogsRouter = require('express').Router()
 const Blog = require('../models/blogs')
 const Comment = require('../models/comment')
+const User = require('../models/user')
 const jwt = require('jsonwebtoken')
 const middlewares = require('../utils/middleware')
 
@@ -65,22 +66,42 @@ blogsRouter.delete(
   async (request, response) => {
     const decodedToken = jwt.verify(request.token, process.env.SECRET)
 
-    // check if user token is valid
     if (!decodedToken.id)
       return response
         .status(401)
         .send({ error: 'token missing or invalid or expired' })
 
-    // find blog and user
     const blogId = request.params.id
     const blog = request.user._id
 
-    // check if user is authorized to delete blog
     if (blog.toString() !== decodedToken.id)
       return response.status(401).send({ error: 'unauthorized' })
 
+    // FIND USER
+    const user = await User.findById(decodedToken.id)
+
+    // FIND THE ASSOCIATED COMMENTS
+    const commentsAssociatedWithBlog = await Comment.find({ blog: blogId })
+
+    // DELETE THE ASSOCIATED COMMENTS FROM THE USER USING FILTER, SOME, AND INVERSION(!)
+    // KEPT ONLY THE VALUES THAT IS TRUE OR NOT ASSOCIATED WITH THE BLOG
+    // .some() checks if this commentId exists in associatedComment
+    user.comments = user.comments.filter(
+      (commentId) =>
+        !commentsAssociatedWithBlog.some(
+          (comment) => comment._id.toString() === commentId.toString()
+        )
+    )
+
+    // DELETE THE BLOG FROM THE USER
+    user.blogs = user.blogs.filter(
+      (userBlogId) => userBlogId.toString() !== blogId
+    )
+
     // delete blog if authorized
+    await user.save()
     await Blog.findByIdAndDelete(blogId)
+    await Comment.deleteMany({ blog: blogId }) // delete associated comments
     response.status(204).end()
   }
 )
